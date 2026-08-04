@@ -1,6 +1,6 @@
 ---
 name: video-extractor
-description: "Extract video transcripts, articles, comments, and text/image content from platforms including Douyin, Bilibili, YouTube, XiaoHongShu, WeChat Channels (微信视频号), WeChat Official Accounts (微信公众号), X/Twitter, Zhihu (知乎), and Xiaoyuzhou podcasts. Handles video, image-text, article, and text-only posts. Uses Whisper large-v3-turbo for native Simplified Chinese output. Supports batch downloads, resume, progress reports, and YouTube Invidious fallback. Triggers: \"提取文案\", \"提取评论\", \"视频转录\", \"video transcript\", \"extract comments\", \"video analysis\", \"播客转录\", \"小宇宙\", \"xiaoyuzhou\", \"下载视频\", \"video download\", \"提取推文\", \"twitter\", \"知乎\", \"zhihu\", \"公众号\", \"wechat\"."
+description: "Extract video transcripts, articles, comments, and text/image content from platforms including Douyin, Bilibili, YouTube, XiaoHongShu, WeChat Channels (微信视频号), WeChat Official Accounts (微信公众号), X/Twitter, Zhihu (知乎), and Xiaoyuzhou podcasts. Handles video, image-text, article, and text-only posts. Uses Whisper large-v3-turbo for native Simplified Chinese output. Supports batch downloads, resume, progress reports, and YouTube Invidious fallback. Triggers: \"提取文案\", \"提取评论\", \"视频转录\", \"video transcript\", \"extract comments\", \"video analysis\", \"播客转录\", \"小宇宙\", \"xiaoyuzhou\", \"下载视频\", \"video download\", \"提取推文\", \"twitter\", \"知乎\", \"zhihu\", \"公众号\", \"wechat\", \"本地视频\", \"逐字稿\", \"转文字\".""
 ---
 
 # Video Extractor
@@ -1158,6 +1158,146 @@ def detect_hallucination(text: str) -> bool:
 
 **Timestamp Offset Fix:** Chunk N's timestamps start from 0, add `N * 600` seconds.
 Use `scripts/merge_chunks.py` for automatic correction.
+
+---
+
+## Task 4a: 本地视频/音频文件转录
+
+When the user provides a local file (`.mp4`, `.mkv`, `.avi`, `.wav`, `.mp3`, `.m4a`, `.flac`, etc.) and asks for a transcript, use this direct workflow — no download needed.
+
+### Detection
+
+If the input is a file path (not a URL) and the file exists, treat it as a local media transcription task.
+
+**Trigger phrases:** "转录这个视频", "给这个视频做逐字稿", "转文字", "transcribe this file", "本地视频转录"
+
+### Workflow
+
+```python
+import os
+os.environ["WHISPER_NO_WSL"] = "1"
+import subprocess
+import whisper
+import datetime as dt
+from pathlib import Path
+
+def transcribe_local_file(
+    input_path: str,
+    out_dir: Path,
+    *,
+    title: str = "",
+    author: str = "",
+    platform: str = "本地文件",
+    source_url: str = "",
+    model_name: str = "large-v3-turbo",
+) -> dict:
+    """Transcribe a local video/audio file.
+    Returns a record dict compatible with download-report format.
+    """
+    record = {
+        "url": source_url or str(input_path),
+        "kind": "local-media",
+        "platform": platform,
+        "status": "failed",
+        "files": [],
+        "bytes": 0,
+        "note": "",
+    }
+    
+    input_path = Path(input_path)
+    if not input_path.exists():
+        record["note"] = f"file-not-found: {input_path}"
+        return record
+    
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Step 1: Extract / convert audio to 16kHz mono WAV
+    wav_path = out_dir / f"{_safe_filename(author or 'local')}_《{_safe_filename(title or input_path.stem)}》.wav"
+    
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(input_path),
+         "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+         str(wav_path)],
+        capture_output=True, text=True, timeout=600,
+    )
+    if result.returncode != 0:
+        record["note"] = f"ffmpeg-error: {result.stderr[-200:]}"
+        return record
+    
+    # Step 2: Get duration from WAV size (16kHz * 16bit * mono = 32000 bytes/sec)
+    duration_sec = wav_path.stat().st_size // 32000
+    
+    # Step 3: Whisper transcription
+    model = whisper.load_model(model_name)
+    result_whisper = model.transcribe(
+        str(wav_path),
+        task="transcribe",
+        language="zh",
+        condition_on_previous_text=False,
+    )
+    
+    # Step 4: Generate standard transcript format
+    def _fmt(sec: float) -> str:
+        m, s = divmod(int(sec), 60)
+        if m >= 60:
+            h, m = divmod(m, 60)
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        return f"{m:02d}:{s:02d}"
+    
+    title_display = title or input_path.stem
+    author_display = author or "未知"
+    duration_str = _fmt(duration_sec)
+    
+    lines = [
+        "# 逐字稿", "",
+        "## 元数据",
+        f"- **标题**：{title_display}",
+        f"- **作者**：{author_display}",
+        f"- **来源**：<{source_url}>" if source_url else f"- **来源**：{input_path.name}",
+        f"- **平台**：{platform}",
+        f"- **语言**：中文",
+        f"- **时长**：{duration_str}",
+        f"- **生成时间**：{dt.date.today().isoformat()}",
+        "", "---", "",
+    ]
+    for seg in result_whisper["segments"]:
+        text = seg["text"].strip()
+        if text:
+            lines.append(f"[{_fmt(seg['start'])} - {_fmt(seg['end'])}] {text}")
+    
+    md_path = out_dir / f"{_safe_filename(author_display)}_《{_safe_filename(title_display)}》_逐字稿.md"
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    
+    # Save metadata
+    meta = {
+        "title": title_display,
+        "author": author_display,
+        "platform": platform,
+        "source": str(input_path),
+        "source_url": source_url,
+        "duration": duration_sec,
+        "model": model_name,
+        "segments": len(result_whisper["segments"]),
+        "word_count": sum(len(s["text"]) for s in result_whisper["segments"]),
+    }
+    (out_dir / ".metadata.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
+    
+    record["status"] = "ok"
+    record["files"] = [str(input_path), str(wav_path), str(md_path)]
+    record["bytes"] = input_path.stat().st_size + wav_path.stat().st_size + md_path.stat().st_size
+    record["note"] = f"时长{duration_str}, {meta['word_count']}字"
+    return record
+```
+
+### Key Notes
+
+- **Works with any format** that ffmpeg supports: mp4, mkv, avi, mov, wav, mp3, m4a, flac, aac, etc.
+- **Metadata guessing**: If title/author are not provided, derive from filename or ask the user.
+- **For long audio (>30 min)**: Use the chunking approach from Task 4 instead of direct transcribe.
+- **Output follows standard format** — same `[MM:SS - MM:SS]` timestamps, same Chinese metadata fields.
+- **The input file is NOT copied to Outputs** — only the generated WAV and transcript go there. The original file stays where it was.
 
 ---
 
