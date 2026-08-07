@@ -69,6 +69,8 @@ def _parse_metadata_from_html(html: str) -> dict:
     
     # Content
     for pat in [
+        # Match js_content div, ending before the trailing UI markers
+        r'<div[^>]*id="js_content"[^>]*>(.*?)</div>\s*(?:<div id="js_tags_preview_toast"|<div id="content_bottom_area"|<div id="font_pannel_area"|</div>\s*</div>)',
         r'<div[^>]*id="js_content"[^>]*>(.*?)</div>\s*</div>',
         r'<div[^>]*class="rich_media_content[^"]*"[^>]*>(.*?)</div>\s*<script',
     ]:
@@ -129,23 +131,39 @@ def _download_images(image_urls: list, content_html: str, out_dir: Path) -> tupl
 
 def _clean_body_text(text: str) -> str:
     """Clean extracted body text: strip trailing hashtag lines and page meta."""
+    # Strip HTML tags (some WeChat HTML slips through as raw tags, e.g. <hr>, <mp-style-type>)
+    text = re.sub(r'<[^>]+>', '', text)
+    # Normalize whitespace after tag stripping
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
     lines = [l.strip() for l in text.split('\n')]
     
+    # WeChat page-UI remnant phrases (not article content)
+    UI_PHRASES = {
+        '预览时标签不可点', '微信扫一扫', '关注该公众号', '知道了', '收录于',
+        '喜欢作者', '发消息', '其它金额', '最低赞赏', '确定', '取消', '允许',
+    }
     # Patterns for WeChat page-meta remnants (not part of article body)
     time_meta = re.compile(r'^(昨天|今天|前天|\d+分钟前|\d+小时前|\d{4}-\d{2}-\d{2})[\s,，]*\d{0,2}:?\d{0,2}$')
     keep = []
     for line in lines:
         stripped = line.strip()
         # Skip hashtag-only lines (WeChat auto tags at the end)
-        if stripped and stripped.startswith('#') and stripped.count('#') > 1:
+        if stripped.startswith('#') and stripped.count('#') > 1:
+            continue
+        # Skip WeChat UI remnant lines
+        if stripped in UI_PHRASES:
             continue
         # Skip pure-meta lines (location/time remnants)
-        if stripped in ('收录于', '北京', '上海', '广州', '深圳', '微信', '原创') \
+        if stripped in ('北京', '上海', '广州', '深圳', '微信', '原创') \
                 or stripped.endswith('合集') and len(stripped) <= 12 \
                 or re.fullmatch(r'[，,。\s]*', stripped) \
                 or time_meta.match(stripped):
             continue
         keep.append(line)
+    # Trim trailing blank lines only
+    while keep and not keep[-1].strip():
+        keep.pop()
     return '\n'.join(keep).strip()
 
 
@@ -164,7 +182,7 @@ def _save_output(info: dict, content_html: str, url: str, out_dir: Path,
     if info.get("content_text"):  # clean text body (image-message articles)
         content_md = _clean_body_text(info["content_text"])
     else:
-        content_md = html_to_markdown(content_html)
+        content_md = _clean_body_text(html_to_markdown(content_html))
     
     # Save markdown
     title_safe = safe_filename(title[:60], "wechat-article")
