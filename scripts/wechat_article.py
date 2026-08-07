@@ -286,6 +286,22 @@ def _tier2_playwright(url: str, out_dir: Path) -> dict:
                     });
                 }
                 
+                // Images in <ol> via background-image (image-message swiper articles)
+                // WeChat puts body images as CSS background-image on li elements inside an ol
+                document.querySelectorAll('ol li').forEach(li => {
+                    const bg = window.getComputedStyle(li).backgroundImage;
+                    if (bg && bg.includes('mmbiz')) {
+                        const m = bg.match(/url\\("?([^")]+)"?\\)/);
+                        if (m) {
+                            let u = m[1].replace(/&amp;/g, '&');
+                            // /300 thumbnail -> /0 original
+                            u = u.replace(/\\/300\\?/, '/0?');
+                            u = u.replace(/&from=appmsg&wxfrom=\\d+/g, '');
+                            if (!r.images.includes(u)) r.images.push(u);
+                        }
+                    }
+                });
+                
                 // Cover image from og:image (for image-message articles with no body images)
                 if (!r.images.length) {
                     const ogImg = document.querySelector('meta[property="og:image"]');
@@ -375,6 +391,19 @@ def _tier3_persistent(url: str, out_dir: Path, user_data_dir: Path = None) -> di
                         }
                     });
                 }
+                // Images in <ol> via background-image (image-message swiper articles)
+                document.querySelectorAll('ol li').forEach(li => {
+                    const bg = window.getComputedStyle(li).backgroundImage;
+                    if (bg && bg.includes('mmbiz')) {
+                        const m = bg.match(/url\\("?([^")]+)"?\\)/);
+                        if (m) {
+                            let u = m[1].replace(/&amp;/g, '&');
+                            u = u.replace(/\\/300\\?/, '/0?');
+                            u = u.replace(/&from=appmsg&wxfrom=\\d+/g, '');
+                            if (!r.images.includes(u)) r.images.push(u);
+                        }
+                    }
+                });
                 if (!r.images.length) {
                     const ogImg = document.querySelector('meta[property="og:image"]');
                     if (ogImg && ogImg.content && ogImg.content.startsWith('http')) {
