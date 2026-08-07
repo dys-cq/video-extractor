@@ -431,7 +431,10 @@ with sync_playwright() as p:
 - **Author**: iterate `[class*="nickname"]` elements, take first non-empty text (≤20 chars). The first match (`input_nickname`) is often empty — must iterate!
 - **Publish time**: JS var `var ct = "unix_timestamp"`
 - **Content**: `#js_content` div (also works for image-message articles)
-- **Images**: `data-src` attribute (lazy loading). If no body images (image-message articles), fall back to `og:image` meta as cover
+- **Images — 3 sources, in priority order**:
+  1. `<img>` tags in content: `data-src` attribute (lazy loading)
+  2. **`<ol> <li>` background-image** (image-message / swiper articles!): the body images are CSS `background-image` on `li` elements inside an `ol`, NOT `<img>` tags. URLs look like `/300?wx_fmt=png` (thumbnail) — replace `/300?` with `/0?` to get original size, strip `&from=appmsg&wxfrom=N`
+  3. `og:image` meta (cover, only if no other images found)
 - **Image download**: needs `Referer: https://mp.weixin.qq.com/` header
 - **Image format**: append `wx_fmt=jpeg` to URL for consistent JPEG
 - **Verification detection**: page text contains "环境异常" / "完成验证" / "验证码"
@@ -462,11 +465,12 @@ Failed: report "article may require login"
 ### Pitfalls
 
 1. **First nickname element is empty** (`input_nickname` class) — must iterate all matches
-2. **Image-message articles have NO `<img>` in body** — use `og:image` meta as cover
-3. **Verification is per-request** — may pass once, fail next time; retry with browser
-4. **Jina AI reader (`r.jina.ai/`) does NOT work** for WeChat — it hits the same verification wall
-5. **Persistent context with user's Chrome profile fails** if Chrome is running (profile locked) — use CDP instead
-6. **Tier 3 requires user to launch Chrome with debug port** — explain clearly, don't auto-restart their browser
+2. **Image-message articles: body images are CSS background-image on `ol > li`**, NOT `<img>` tags — must scan `getComputedStyle(li).backgroundImage`. The `<ol>` is the swiper indicator; each `li` shows one image. URLs have `/300` thumbnail suffix — convert to `/0` for originals
+3. **Network-level image capture catches junk** — 17 URLs captured but only 7 are body images (rest are avatars/icons); DOM background-image extraction is precise
+4. **Verification is per-request** — may pass once, fail next time; retry with browser
+5. **Jina AI reader (`r.jina.ai/`) does NOT work** for WeChat — it hits the same verification wall
+6. **Persistent context with user's Chrome profile fails** if Chrome is running (profile locked) — use CDP instead
+7. **Tier 3 requires user to launch Chrome with debug port** — explain clearly, don't auto-restart their browser
 
 ---
 
