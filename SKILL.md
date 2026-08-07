@@ -1,6 +1,6 @@
 ---
 name: video-extractor
-description: "Extract video transcripts, articles, comments, and text/image content from platforms including Douyin, Bilibili, YouTube, XiaoHongShu, WeChat Channels (微信视频号), WeChat Official Accounts (微信公众号), X/Twitter, Zhihu (知乎), and Xiaoyuzhou podcasts. Handles video, image-text, article, and text-only posts. Uses Whisper large-v3-turbo for native Simplified Chinese output. Supports batch downloads, resume, progress reports, and YouTube Invidious fallback. Triggers: \"提取文案\", \"提取评论\", \"视频转录\", \"video transcript\", \"extract comments\", \"video analysis\", \"播客转录\", \"小宇宙\", \"xiaoyuzhou\", \"下载视频\", \"video download\", \"提取推文\", \"twitter\", \"知乎\", \"zhihu\", \"公众号\", \"wechat\", \"本地视频\", \"逐字稿\", \"转文字\".""
+description: "Extract video transcripts, articles, comments, and text/image content from platforms including Douyin, Bilibili, YouTube, XiaoHongShu, WeChat Channels (微信视频号), WeChat Official Accounts (微信公众号), X/Twitter, Zhihu (知乎), and Xiaoyuzhou podcasts. Handles video, image-text, article, and text-only posts. Uses Whisper large-v3-turbo for native Simplified Chinese output. Supports batch downloads, resume, progress reports, and YouTube Invidious fallback. Triggers: \"提取文案\", \"提取评论\", \"视频转录\", \"video transcript\", \"extract comments\", \"video analysis\", \"播客转录\", \"小宇宙\", \"xiaoyuzhou\", \"下载视频\", \"video download\", \"提取推文\", \"twitter\", \"知乎\", \"zhihu\", \"公众号\", \"wechat\", \"本地视频\", \"逐字稿\", \"转文字\"."
 ---
 
 # Video Extractor
@@ -364,138 +364,109 @@ def fetch_wx_channels(url: str, out_dir: Path, *, max_mb: float = 2000) -> dict:
 
 When the URL contains `mp.weixin.qq.com/s/`, this is a WeChat article extraction task.
 
-### Method: Direct HTTP Request (PRIMARY)
+### Method: 3-Tier Fallback
 
-WeChat public articles can be fetched directly with a simple GET request — no login needed, no Playwright required. The full article content is returned in the HTML.
+| Tier | Method | Use when | Notes |
+|------|--------|----------|-------|
+| 1 | Direct HTTP request | Most public articles | Fastest, no browser needed |
+| 2 | Playwright non-headless + stealth | Tier 1 blocked by "环境异常" verification | Opens a real browser window |
+| 3 | CDP connection (Chrome port 9222) | Tier 2 also fails | Reuses user's logged-in browser |
 
-### Workflow
+**Tier 1: Direct HTTP Request (PRIMARY)**
 
 ```python
-import requests, re, datetime as dt
-from pathlib import Path
+import requests, re
 
 WX_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept-Language": "zh-CN,zh;q=0.9",
 }
 
-def extract_wechat_article(url: str, out_dir: Path) -> dict:
-    record = {"url": url, "kind": "wechat-article", "platform": "微信公众号",
-              "status": "failed", "files": [], "bytes": 0, "note": ""}
-    
-    # Step 1: Fetch page
-    r = requests.get(url, headers=WX_HEADERS, timeout=30)
-    r.raise_for_status()
-    html = r.text
-    
-    # Step 2: Extract metadata
-    title = ""
-    m = re.search(r'<h1[^>]*id="activity-name"[^>]*>(.*?)</h1>', html, re.DOTALL)
-    if m:
-        title = re.sub(r'<[^>]+>', '', m.group(1)).strip()
-    
-    # Author (multiple fallbacks)
-    author = ""
-    for pat in [
-        r'<a[^>]*id="js_name"[^>]*>(.*?)</a>',
-        r'var nickname = "([^"]+)"',
-    ]:
-        m = re.search(pat, html, re.DOTALL)
-        if m:
-            author = re.sub(r'<[^>]+>', '', m.group(1)).strip()
-            break
-    
-    # Publish time
-    publish_time = ""
-    m = re.search(r'var ct = "(\d+)"', html)
-    if m:
-        publish_time = dt.datetime.fromtimestamp(int(m.group(1))).strftime("%Y-%m-%d")
-    
-    # Step 3: Extract content
-    content_html = ""
-    m = re.search(r'<div[^>]*id="js_content"[^>]*>(.*?)</div>\s*</div>', html, re.DOTALL)
-    if m:
-        content_html = m.group(1)
-    
-    # Step 4: Extract images (use data-src for lazy-loaded images)
-    image_urls = []
-    for m in re.finditer(r'<img[^>]+data-src="([^"]+)"', content_html):
-        u = m.group(1)
-        if u.startswith('http') and 'mmbiz' in u and u not in image_urls:
-            image_urls.append(u)
-    
-    # Step 5: Download images with Referer
-    downloaded_images = []
-    img_headers = dict(WX_HEADERS)
-    img_headers["Referer"] = "https://mp.weixin.qq.com/"
-    
-    for i, img_url in enumerate(image_urls, 1):
-        try:
-            # Add wx_fmt=jpeg for consistent format
-            full_url = img_url + ('&wx_fmt=jpeg' if '?' in img_url else '?wx_fmt=jpeg')
-            target = out_dir / f"image_{i}.jpg"
-            r_img = requests.get(full_url, headers=img_headers, timeout=30, stream=True)
-            if r_img.status_code == 200:
-                size = 0
-                with open(target, 'wb') as f:
-                    for chunk in r_img.iter_content(64*1024):
-                        if chunk:
-                            f.write(chunk)
-                            size += len(chunk)
-                if size > 2000:
-                    downloaded_images.append((i, target.name, size))
-                    # Replace URL in content for local reference
-                    content_html = content_html.replace(img_url, target.name)
-        except:
-            continue
-    
-    # Step 6: HTML → Markdown (see full html_to_markdown function in Task 2b)
-    content_md = html_to_markdown(content_html)
-    
-    # Step 7: Save output (standard format)
-    title_safe = _safe_filename(title[:60], "wechat-article")
-    author_safe = _safe_filename(author, "wechat")
-    md_path = out_dir / f"{author_safe}_《{title_safe}》_公众号文章.md"
-    
-    full_md = f"""# {title}
-
-## 元数据
-- **标题**：{title}
-- **作者**：{author}
-- **来源**：<{url}>
-- **平台**：微信公众号
-- **发布时间**：{publish_time}
-- **图片数**：{len(downloaded_images)}
-- **生成时间**：{dt.date.today().isoformat()}
-
----
-
-## 正文
-
-{content_md}
-"""
-    md_path.write_text(full_md, encoding="utf-8")
-    
-    record["status"] = "ok"
-    record["files"] = [str(md_path)] + [str(out_dir / n) for _, n, _ in downloaded_images]
-    record["bytes"] = sum(s for _, _, s in downloaded_images) + md_path.stat().st_size
-    record["note"] = f"{len(content_md)}字, {len(downloaded_images)}图"
-    
-    (out_dir / ".metadata.json").write_text(
-        json.dumps({"title": title, "author": author, "url": url,
-                    "publish_time": publish_time, "platform": "微信公众号",
-                    "word_count": len(content_md), "image_count": len(downloaded_images)},
-                   ensure_ascii=False, indent=2), encoding="utf-8")
-    return record
+r = requests.get(url, headers=WX_HEADERS, timeout=30)
+html = r.text
 ```
 
-### Key Notes
+**Tier 2: Playwright (for verification-blocked articles)**
 
-- **No login required** for public articles — direct GET works
-- **Image URLs are in `data-src`** not `src` — WeChat uses lazy loading
-- **Add `wx_fmt=jpeg`** to URL to ensure JPEG format (WeChat uses webp by default sometimes)
-- **Include `Referer: https://mp.weixin.qq.com/`** when downloading images
-- **Output filename pattern:** `{author}_《{title}》_公众号文章.md`
+```python
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(
+        headless=False,  # Non-headless REQUIRED
+        args=['--disable-blink-features=AutomationControlled', '--no-sandbox'],
+    )
+    context = browser.new_context(
+        user_agent=WX_HEADERS["User-Agent"],
+        viewport={"width": 1280, "height": 900}, locale="zh-CN",
+    )
+    context.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+        window.chrome = {runtime: {}};
+    """)
+    page = context.new_page()
+    page.goto(url, timeout=30000, wait_until="domcontentloaded")
+    page.wait_for_timeout(3000)
+```
+
+**Tier 3: CDP (reuse user's logged-in Chrome)**
+
+Requires Chrome running with `--remote-debugging-port=9222`. Then:
+```python
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+    context = browser.contexts[0] if browser.contexts else browser.new_context()
+    page = context.new_page()
+    # ... same extraction logic ...
+    page.close()
+    browser.close()  # disconnects only, does NOT close user's Chrome
+```
+
+### Key Extraction Notes
+
+- **Title**: `#activity-name` element, or `og:title` meta
+- **Author**: iterate `[class*="nickname"]` elements, take first non-empty text (≤20 chars). The first match (`input_nickname`) is often empty — must iterate!
+- **Publish time**: JS var `var ct = "unix_timestamp"`
+- **Content**: `#js_content` div (also works for image-message articles)
+- **Images**: `data-src` attribute (lazy loading). If no body images (image-message articles), fall back to `og:image` meta as cover
+- **Image download**: needs `Referer: https://mp.weixin.qq.com/` header
+- **Image format**: append `wx_fmt=jpeg` to URL for consistent JPEG
+- **Verification detection**: page text contains "环境异常" / "完成验证" / "验证码"
+- **Filename**: `{author}_《{title}》_公众号文章.md`
+
+### Workflow
+
+```
+Given mp.weixin.qq.com/s/ URL
+   |
+   v
+Tier 1: requests.get() → content found? → YES → Done
+   |
+   NO (verification page)
+   |
+   v
+Tier 2: Playwright non-headless → content found? → YES → Done
+   |
+   NO
+   |
+   v
+Tier 3: CDP connect to user's Chrome (port 9222) → content found? → YES → Done
+   |
+   v
+Failed: report "article may require login"
+```
+
+### Pitfalls
+
+1. **First nickname element is empty** (`input_nickname` class) — must iterate all matches
+2. **Image-message articles have NO `<img>` in body** — use `og:image` meta as cover
+3. **Verification is per-request** — may pass once, fail next time; retry with browser
+4. **Jina AI reader (`r.jina.ai/`) does NOT work** for WeChat — it hits the same verification wall
+5. **Persistent context with user's Chrome profile fails** if Chrome is running (profile locked) — use CDP instead
+6. **Tier 3 requires user to launch Chrome with debug port** — explain clearly, don't auto-restart their browser
 
 ---
 
