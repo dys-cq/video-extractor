@@ -131,8 +131,8 @@ def _clean_body_text(text: str) -> str:
     """Clean extracted body text: strip trailing hashtag lines and page meta."""
     lines = [l.strip() for l in text.split('\n')]
     
-    # Remove trailing hashtag line (e.g. "#内容创作 #AI工具 #自媒体工具")
-    # and lines that are just page meta (收录于, 北京, 昨天 15:00, 等)
+    # Patterns for WeChat page-meta remnants (not part of article body)
+    time_meta = re.compile(r'^(昨天|今天|前天|\d+分钟前|\d+小时前|\d{4}-\d{2}-\d{2})[\s,，]*\d{0,2}:?\d{0,2}$')
     keep = []
     for line in lines:
         stripped = line.strip()
@@ -140,7 +140,10 @@ def _clean_body_text(text: str) -> str:
         if stripped and stripped.startswith('#') and stripped.count('#') > 1:
             continue
         # Skip pure-meta lines (location/time remnants)
-        if stripped in ('收录于',) or re.fullmatch(r'[，,。\s]*', stripped):
+        if stripped in ('收录于', '北京', '上海', '广州', '深圳', '微信', '原创') \
+                or stripped.endswith('合集') and len(stripped) <= 12 \
+                or re.fullmatch(r'[，,。\s]*', stripped) \
+                or time_meta.match(stripped):
             continue
         keep.append(line)
     return '\n'.join(keep).strip()
