@@ -127,6 +127,25 @@ def _download_images(image_urls: list, content_html: str, out_dir: Path) -> tupl
     return downloaded, content_html
 
 
+def _clean_body_text(text: str) -> str:
+    """Clean extracted body text: strip trailing hashtag lines and page meta."""
+    lines = [l.strip() for l in text.split('\n')]
+    
+    # Remove trailing hashtag line (e.g. "#内容创作 #AI工具 #自媒体工具")
+    # and lines that are just page meta (收录于, 北京, 昨天 15:00, 等)
+    keep = []
+    for line in lines:
+        stripped = line.strip()
+        # Skip hashtag-only lines (WeChat auto tags at the end)
+        if stripped and stripped.startswith('#') and stripped.count('#') > 1:
+            continue
+        # Skip pure-meta lines (location/time remnants)
+        if stripped in ('收录于',) or re.fullmatch(r'[，,。\s]*', stripped):
+            continue
+        keep.append(line)
+    return '\n'.join(keep).strip()
+
+
 def _save_output(info: dict, content_html: str, url: str, out_dir: Path,
                  method: str = "http") -> dict:
     """Save article content and metadata to output directory."""
@@ -139,7 +158,10 @@ def _save_output(info: dict, content_html: str, url: str, out_dir: Path,
     downloaded_images, content_html = _download_images(images, content_html, out_dir)
     
     # Convert to markdown
-    content_md = html_to_markdown(content_html)
+    if info.get("content_text"):  # clean text body (image-message articles)
+        content_md = _clean_body_text(info["content_text"])
+    else:
+        content_md = html_to_markdown(content_html)
     
     # Save markdown
     title_safe = safe_filename(title[:60], "wechat-article")
@@ -272,7 +294,13 @@ def _tier2_playwright(url: str, out_dir: Path) -> dict:
                 // Publish time from JS var ct
                 try { r.publish_time = new Date(ct * 1000).toISOString().slice(0, 10); } catch(e) {}
                 
-                // Content
+                // Content: prefer .share_notice (image-message articles have clean text body here)
+                const shareNotice = document.querySelector('#js_image_content p.share_notice')
+                    || document.querySelector('p.share_notice')
+                    || document.querySelector('.share_notice');
+                if (shareNotice) {
+                    r.content_text = shareNotice.innerText.trim();
+                }
                 const content = document.querySelector('#js_content');
                 if (content) r.content_html = content.innerHTML;
                 
@@ -381,6 +409,12 @@ def _tier3_persistent(url: str, out_dir: Path, user_data_dir: Path = None) -> di
                     }
                 }
                 try { r.publish_time = new Date(ct * 1000).toISOString().slice(0, 10); } catch(e) {}
+                const shareNotice = document.querySelector('#js_image_content p.share_notice')
+                    || document.querySelector('p.share_notice')
+                    || document.querySelector('.share_notice');
+                if (shareNotice) {
+                    r.content_text = shareNotice.innerText.trim();
+                }
                 const content = document.querySelector('#js_content');
                 if (content) {
                     r.content_html = content.innerHTML;
