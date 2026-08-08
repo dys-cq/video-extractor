@@ -90,13 +90,16 @@ python -m playwright install chromium
 video-extractor/
 ├── SKILL.md                      # Skill 主文档
 ├── scripts/
-│   ├── extractor.py              # 主提取器
+│   ├── __init__.py               # 包入口 (process_url / detect_platform)
+│   ├── extractor.py              # 主提取器（URL → 平台分发）
+│   ├── utils.py                  # 工具函数（下载/转录/报告/HTML转换）
+│   ├── douyin.py                 # 抖音提取（Playwright拦截 + 标题去重）
+│   ├── wechat_article.py         # 公众号文章提取（3级fallback + 噪声清理）
 │   ├── transcribe_windows.py     # Windows分块转录
 │   ├── merge_chunks.py           # 分块合并工具
-│   ├── wechat_article.py         # 公众号文章提取
 │   ├── xiaoyuzhou_extract.py     # 小宇宙播客提取
 │   ├── extract_comments.py       # 评论提取
-│   └── utils.py                  # 工具函数
+│   └── traditional_to_simplified.py # 繁简转换（备用）
 └── references/
     ├── platforms.md              # 平台细节说明
     └── whisper-windows-wsl-fix.md # Windows WSL弹窗修复
