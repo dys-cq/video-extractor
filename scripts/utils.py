@@ -22,11 +22,21 @@ def get_output_root() -> Path:
     return Path.cwd() / "Outputs"
 
 
-def make_run_dir(topic: str = "video-download") -> Path:
-    """Create dated output directory: {root}/YYYY-MM-DD-{topic}/"""
+def make_run_dir(platform: str = "", title: str = "", topic: str = "video-download") -> Path:
+    """Create dated output directory.
+
+    Format: {root}/YYYY-MM-DD-{platform}-《{title}》/  (shows platform + content at a glance)
+    Fallback: {root}/YYYY-MM-DD-{topic}/             (when platform/title unknown)
+    """
     root = get_output_root()
     date = dt.date.today().isoformat()
-    candidate = root / f"{date}-{topic}"
+    if platform and title:
+        p = safe_filename(platform, max_len=20)
+        t = safe_filename(title, max_len=40)
+        slug = f"{p}-《{t}》"
+    else:
+        slug = safe_filename(topic, fallback="video-download")
+    candidate = root / f"{date}-{slug}"
     candidate.mkdir(parents=True, exist_ok=True)
     return candidate
 
