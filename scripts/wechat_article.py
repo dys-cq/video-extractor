@@ -15,7 +15,7 @@ from pathlib import Path
 import requests
 
 from .utils import (
-    safe_filename, download_with_resume, html_to_markdown,
+    safe_filename, make_run_dir, download_with_resume, html_to_markdown,
     build_article_md,
 )
 
@@ -177,13 +177,20 @@ def _clean_body_text(text: str) -> str:
     return '\n'.join(keep).strip()
 
 
-def _save_output(info: dict, content_html: str, url: str, out_dir: Path,
+def _save_output(info: dict, content_html: str, url: str, out_dir: Path = None,
                  method: str = "http") -> dict:
-    """Save article content and metadata to output directory."""
+    """Save article content and metadata to output directory.
+
+    out_dir may be None — then auto-creates {root}/YYYY-MM-DD-{author}-《{title}》/.
+    """
     title = info.get("title", "")
     author = info.get("author", "")
     publish_time = info.get("publish_time", "")
     images = info.get("images", [])
+    
+    if out_dir is None:
+        out_dir = make_run_dir("微信公众号文章", title or "", topic="微信公众号文章")
+    out_dir.mkdir(parents=True, exist_ok=True)
     
     # Download images
     downloaded_images, content_html = _download_images(images, content_html, out_dir)
@@ -489,19 +496,18 @@ def _tier3_persistent(url: str, out_dir: Path, user_data_dir: Path = None) -> di
         return None
 
 
-def extract(url: str, out_dir: Path, *, prefer_method: str = "auto") -> dict:
+def extract(url: str, out_dir: Path = None, *, prefer_method: str = "auto") -> dict:
     """Extract a WeChat article with 3-tier fallback.
     
     Args:
         url: WeChat article URL (mp.weixin.qq.com/s/...)
-        out_dir: Output directory
+        out_dir: Output directory. If None, auto-creates
+            {root}/YYYY-MM-DD-{author}-《{title}》/ from fetched metadata.
         prefer_method: "auto" (tries all tiers), "http", "playwright", "cdp"
     
     Returns:
         Record dict. Status is "failed" if all tiers fail.
     """
-    out_dir.mkdir(parents=True, exist_ok=True)
-    
     base_record = {
         "url": url, "kind": "wechat-article", "platform": "微信公众号",
         "status": "failed", "files": [], "bytes": 0, "note": "",
