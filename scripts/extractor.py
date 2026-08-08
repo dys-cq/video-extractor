@@ -38,12 +38,13 @@ def detect_platform(url: str) -> str:
     return "unknown"
 
 
-def process_url(url: str, out_dir: Path, *, transcribe: bool = True) -> dict:
+def process_url(url: str, out_dir: Path = None, *, transcribe: bool = True) -> dict:
     """Process a single URL — auto-detect platform and extract.
 
     Args:
         url: The content URL.
-        out_dir: Output directory.
+        out_dir: Output directory. If None, each platform extractor auto-creates
+            {root}/YYYY-MM-DD-{author}-《{title}》/ from fetched metadata.
         transcribe: Whether to transcribe video/audio to text.
 
     Returns:
@@ -52,7 +53,6 @@ def process_url(url: str, out_dir: Path, *, transcribe: bool = True) -> dict:
     from .utils import make_run_dir, safe_filename
 
     platform = detect_platform(url)
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     if platform == "wechat_article":
         from . import wechat_article
@@ -72,7 +72,7 @@ def process_url(url: str, out_dir: Path, *, transcribe: bool = True) -> dict:
 
     if platform == "douyin":
         from . import douyin
-        return douyin.extract(url, out_dir, transcribe=transcribe)
+        return douyin.extract(url, out_dir, do_transcribe=transcribe)
 
     if platform == "twitter":
         from . import twitter
