@@ -14,7 +14,7 @@ from pathlib import Path
 import requests
 
 from .utils import (
-    safe_filename, extract_audio, transcribe, build_transcript_md,
+    safe_filename, make_run_dir, extract_audio, transcribe, build_transcript_md,
     write_reports,
 )
 
@@ -84,18 +84,23 @@ def _intercept_video_url(short_url: str, timeout_ms: int = 6000) -> tuple:
     return video_url, author, title
 
 
-def extract(url: str, out_dir: Path, *, transcribe: bool = True, ffmpeg: str = "ffmpeg") -> dict:
+def extract(url: str, out_dir: Path = None, *, do_transcribe: bool = True, ffmpeg: str = "ffmpeg") -> dict:
     """Extract Douyin video: download + audio + Whisper transcript.
+
+    Args:
+        url: Douyin share URL.
+        out_dir: Output directory. If None, auto-creates
+            {root}/YYYY-MM-DD-{author}-《{title}》/ from fetched metadata.
+        do_transcribe: Whether to extract audio + transcribe.
 
     Returns a record dict with status, files, bytes, etc.
     """
-    out_dir.mkdir(parents=True, exist_ok=True)
     record = {
         "url": url, "kind": "douyin", "platform": "抖音",
         "status": "failed", "files": [], "bytes": 0, "note": "",
     }
 
-    # Step 1: intercept video URL
+    # Step 1: intercept video URL (fetch metadata first)
     video_url, author, title = _intercept_video_url(url)
     title = dedup_title(title)
 
@@ -103,7 +108,12 @@ def extract(url: str, out_dir: Path, *, transcribe: bool = True, ffmpeg: str = "
         record["note"] = "video-url-not-found (anti-bot interception failed)"
         return record
 
-    # Step 2: download video
+    # Step 2: determine output dir from platform/title (readable folder name)
+    if out_dir is None:
+        out_dir = make_run_dir("抖音视频", title, topic="抖音视频")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Step 3: download video
     author_safe = safe_filename(author, "抖音用户")
     title_safe = safe_filename(title[:50], "抖音视频")
     video_path = out_dir / f"{author_safe}_《{title_safe}》_video.mp4"
@@ -119,19 +129,19 @@ def extract(url: str, out_dir: Path, *, transcribe: bool = True, ffmpeg: str = "
 
     files = [str(video_path)]
 
-    # Step 3: audio
+    # Step 4: audio
     wav_path = out_dir / f"{author_safe}_《{title_safe}》.wav"
     duration = 0
-    if transcribe:
+    if do_transcribe:
         try:
             duration = extract_audio(str(video_path), str(wav_path), ffmpeg=ffmpeg)
             files.append(str(wav_path))
         except Exception as e:
             record["note"] = f"audio-extract-failed: {str(e)[:100]}"
 
-    # Step 4: transcript
+    # Step 5: transcript
     seg_count = 0
-    if transcribe and wav_path.exists():
+    if do_transcribe and wav_path.exists():
         try:
             tr = transcribe(str(wav_path))
             segments = tr["segments"]
@@ -175,7 +185,7 @@ def main():
     url = sys.argv[1]
     transcribe_flag = "--no-transcribe" not in sys.argv
     out_dir = make_run_dir("抖音视频")
-    result = extract(url, out_dir, transcribe=transcribe_flag)
+    result = extract(url, out_dir, do_transcribe=transcribe_flag)
     print(f"Status: {result['status']}")
     print(f"Note: {result.get('note')}")
     for f in result["files"]:
