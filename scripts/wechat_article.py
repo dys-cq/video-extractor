@@ -143,6 +143,10 @@ def _clean_body_text(text: str) -> str:
         '预览时标签不可点', '微信扫一扫', '关注该公众号', '知道了', '收录于',
         '喜欢作者', '发消息', '其它金额', '最低赞赏', '确定', '取消', '允许',
     }
+    # Copyright / image-source disclaimers (noise, not article body)
+    COPYRIGHT_META = re.compile(
+        r'(来源于网络|来自网络|图片来自|素材来自|无商业行为|侵删|侵权请联系|联系删除|版权归|版权声明|如涉版权|如有版权)'
+    )
     # Patterns for WeChat page-meta remnants (not part of article body)
     time_meta = re.compile(r'^(昨天|今天|前天|\d+分钟前|\d+小时前|\d{4}-\d{2}-\d{2})[\s,，]*\d{0,2}:?\d{0,2}$')
     keep = []
@@ -153,6 +157,12 @@ def _clean_body_text(text: str) -> str:
             continue
         # Skip WeChat UI remnant lines
         if stripped in UI_PHRASES:
+            continue
+        # Skip WeChat code-block marker ("CODE" on its own line)
+        if stripped == 'CODE':
+            continue
+        # Skip copyright/image-source disclaimers
+        if COPYRIGHT_META.search(stripped):
             continue
         # Skip pure-meta lines (location/time remnants)
         if stripped in ('北京', '上海', '广州', '深圳', '微信', '原创') \
